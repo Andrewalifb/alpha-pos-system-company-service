@@ -3,13 +3,14 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
+	"os"
 	"time"
 
 	pb "github.com/Andrewalifb/alpha-pos-system-company-service/api/proto"
 	"github.com/Andrewalifb/alpha-pos-system-company-service/dto"
 	"github.com/Andrewalifb/alpha-pos-system-company-service/entity"
 	"github.com/Andrewalifb/alpha-pos-system-company-service/pkg/repository"
+	"github.com/Andrewalifb/alpha-pos-system-company-service/utils"
 
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -45,35 +46,11 @@ func (s *PosStoreBranchServiceServer) CreatePosStoreBranch(ctx context.Context, 
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println("ROLE NAME :", loginRole.RoleName)
-	// Check if the role is "super user"
-	if loginRole.RoleName != "company" {
+
+	// Role checker
+	if !utils.IsCompanyUser(loginRole.RoleName) {
 		return nil, errors.New("users are not allowed to create branch")
 	}
-
-	// Check role ID to determine what kind of user can be created
-	// switch loginRole.RoleName {
-	// case "super user":
-	// 	// Can create users with role "Company", "Branch", and "Store"
-	// 	if req.PosStoreBranch.RoleName != "Company" && req.PosStoreBranch.RoleName != "Branch" && req.PosStoreBranch.RoleName != "Store" {
-	// 		return nil, errors.New("Invalid role for new user")
-	// 	}
-	// case "company":
-	// 	// Can create users with role "Branch" and "Store"
-	// 	if req.PosStoreBranch.RoleName != "Branch" && req.PosStoreBranch.RoleName != "Store" {
-	// 		return nil, errors.New("Invalid role for new user")
-	// 	}
-	// case "branch":
-	// 	// Can create users with role "Store"
-	// 	if req.PosStoreBranch.RoleName != "Store" {
-	// 		return nil, errors.New("Invalid role for new user")
-	// 	}
-	// case "store":
-	// 	// Cannot create any user
-	// 	return nil, errors.New("Cannot create new user")
-	// default:
-	// 	return nil, errors.New("Invalid role for current user")
-	// }
 
 	req.PosStoreBranch.BranchId = uuid.New().String() // Generate a new UUID for the branch_id
 
@@ -83,13 +60,13 @@ func (s *PosStoreBranchServiceServer) CreatePosStoreBranch(ctx context.Context, 
 
 	// Convert pb.PosStoreBranch to entity.PosStoreBranch
 	gormStoreBranch := &entity.PosStoreBranch{
-		BranchID:   uuid.MustParse(req.PosStoreBranch.BranchId),
+		BranchID:   uuid.MustParse(req.PosStoreBranch.BranchId), // auto
 		BranchName: req.PosStoreBranch.BranchName,
-		CompanyID:  uuid.MustParse(req.JwtPayload.CompanyId),
-		CreatedAt:  req.PosStoreBranch.CreatedAt.AsTime(),
-		CreatedBy:  uuid.MustParse(req.JwtPayload.UserId),
-		UpdatedAt:  req.PosStoreBranch.UpdatedAt.AsTime(),
-		UpdatedBy:  uuid.MustParse(req.JwtPayload.UserId),
+		CompanyID:  uuid.MustParse(req.JwtPayload.CompanyId), // auto
+		CreatedAt:  req.PosStoreBranch.CreatedAt.AsTime(),    // auto
+		CreatedBy:  uuid.MustParse(req.JwtPayload.UserId),    // auto
+		UpdatedAt:  req.PosStoreBranch.UpdatedAt.AsTime(),    // auto
+		UpdatedBy:  uuid.MustParse(req.JwtPayload.UserId),    // auto
 	}
 
 	err = s.branchRepo.CreatePosStoreBranch(gormStoreBranch)
@@ -115,6 +92,11 @@ func (s *PosStoreBranchServiceServer) ReadAllPosStoreBranches(ctx context.Contex
 	loginRole, err := s.roleRepo.ReadPosRole(jwtRoleID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Role checker
+	if !utils.IsCompanyUser(loginRole.RoleName) {
+		return nil, errors.New("users are not allowed to read all branch data")
 	}
 
 	paginationResult, err := s.branchRepo.ReadAllPosStoreBranches(pagination, loginRole.RoleName, req.JwtPayload)
@@ -147,12 +129,6 @@ func (s *PosStoreBranchServiceServer) ReadAllPosStoreBranches(ctx context.Contex
 }
 
 func (s *PosStoreBranchServiceServer) ReadPosStoreBranch(ctx context.Context, req *pb.ReadPosStoreBranchRequest) (*pb.ReadPosStoreBranchResponse, error) {
-	// Get req data role name
-	posStoreBranch, err := s.branchRepo.ReadPosStoreBranch(req.BranchId)
-	if err != nil {
-		return nil, err
-	}
-
 	// Extract role ID from JWT payload
 	jwtRoleID := req.JwtPayload.Role
 
@@ -162,19 +138,28 @@ func (s *PosStoreBranchServiceServer) ReadPosStoreBranch(ctx context.Context, re
 		return nil, err
 	}
 
-	// Check if the role is "store"
-	if loginRole.RoleName == "store" {
-		return nil, errors.New("store users are not allowed to retrieve store branches")
+	if !utils.IsCompanyOrBranchUser(loginRole.RoleName) {
+		return nil, errors.New("users are not allowed to retrieve store branches")
 	}
 
-	// Check if the role is "company" and the company IDs don't match
-	if loginRole.RoleName == "company" && posStoreBranch.CompanyId != req.JwtPayload.CompanyId {
-		return nil, errors.New("company users can only retrieve store branches within their company")
+	posStoreBranch, err := s.branchRepo.ReadPosStoreBranch(req.BranchId)
+	if err != nil {
+		return nil, err
 	}
 
-	// Check if the role is "branch" and the branch IDs don't match
-	if loginRole.RoleName == "branch" && posStoreBranch.BranchId != req.JwtPayload.BranchId {
-		return nil, errors.New("branch users can only retrieve store branches within their branch")
+	companyRole := os.Getenv("COMPANY_USER_ROLE")
+	branchRole := os.Getenv("BRANCH_USER_ROLE")
+
+	if loginRole.RoleName == companyRole {
+		if !utils.VerifyCompanyUserAccess(loginRole.RoleName, posStoreBranch.CompanyId, req.JwtPayload.CompanyId) {
+			return nil, errors.New("company users can only retrieve branches within their company")
+		}
+	}
+
+	if loginRole.RoleName == branchRole {
+		if !utils.VerifyBranchUserAccess(loginRole.RoleName, posStoreBranch.BranchId, req.JwtPayload.BranchId) {
+			return nil, errors.New("branch users can only retrieve their branch")
+		}
 	}
 
 	return &pb.ReadPosStoreBranchResponse{
@@ -192,9 +177,9 @@ func (s *PosStoreBranchServiceServer) UpdatePosStoreBranch(ctx context.Context, 
 		return nil, err
 	}
 
-	// Check if the role is "store"
-	if loginRole.RoleName == "store" {
-		return nil, errors.New("store users are not allowed to update store branches")
+	// Role checker
+	if !utils.IsCompanyUser(loginRole.RoleName) {
+		return nil, errors.New("users are not allowed to update store branches")
 	}
 
 	// Get the store branch to be updated
@@ -203,14 +188,8 @@ func (s *PosStoreBranchServiceServer) UpdatePosStoreBranch(ctx context.Context, 
 		return nil, err
 	}
 
-	// Check if the role is "company" and the company IDs don't match
-	if loginRole.RoleName == "company" && posStoreBranch.CompanyId != req.JwtPayload.CompanyId {
+	if !utils.VerifyCompanyUserAccess(loginRole.RoleName, posStoreBranch.CompanyId, req.JwtPayload.CompanyId) {
 		return nil, errors.New("company users can only update store branches within their company")
-	}
-
-	// Check if the role is "branch" and the branch IDs don't match
-	if loginRole.RoleName == "branch" && posStoreBranch.BranchId != req.JwtPayload.BranchId {
-		return nil, errors.New("branch users can only update store branches within their branch")
 	}
 
 	now := timestamppb.New(time.Now())
@@ -219,13 +198,13 @@ func (s *PosStoreBranchServiceServer) UpdatePosStoreBranch(ctx context.Context, 
 
 	// Convert pb.PosStoreBranch to entity.PosStoreBranch
 	gormStoreBranch := &entity.PosStoreBranch{
-		BranchID:   uuid.MustParse(req.PosStoreBranch.BranchId),
+		BranchID:   uuid.MustParse(posStoreBranch.BranchId), // auto
 		BranchName: req.PosStoreBranch.BranchName,
-		CompanyID:  uuid.MustParse(req.PosStoreBranch.CompanyId),
-		CreatedAt:  posStoreBranch.CreatedAt.AsTime(),
-		CreatedBy:  uuid.MustParse(posStoreBranch.CreatedBy),
-		UpdatedAt:  req.PosStoreBranch.UpdatedAt.AsTime(),
-		UpdatedBy:  uuid.MustParse(req.PosStoreBranch.UpdatedBy),
+		CompanyID:  uuid.MustParse(posStoreBranch.CompanyId),     // auto
+		CreatedAt:  posStoreBranch.CreatedAt.AsTime(),            // auto
+		CreatedBy:  uuid.MustParse(posStoreBranch.CreatedBy),     // auto
+		UpdatedAt:  req.PosStoreBranch.UpdatedAt.AsTime(),        // auto
+		UpdatedBy:  uuid.MustParse(req.PosStoreBranch.UpdatedBy), // auto
 	}
 
 	// Update the store branch
@@ -249,9 +228,9 @@ func (s *PosStoreBranchServiceServer) DeletePosStoreBranch(ctx context.Context, 
 		return nil, err
 	}
 
-	// Check if the role is "store"
-	if loginRole.RoleName == "store" || loginRole.RoleName == "branch" {
-		return nil, errors.New("store users are not allowed to delete store branches")
+	// Role checker
+	if !utils.IsCompanyUser(loginRole.RoleName) {
+		return nil, errors.New("users are not allowed to delete store branches")
 	}
 
 	// Get the store branch to be deleted
@@ -260,9 +239,8 @@ func (s *PosStoreBranchServiceServer) DeletePosStoreBranch(ctx context.Context, 
 		return nil, err
 	}
 
-	// Check if the role is "company" and the company IDs don't match
-	if loginRole.RoleName == "company" && posStoreBranch.CompanyId != req.JwtPayload.CompanyId {
-		return nil, errors.New("Company users can only delete store branches within their company")
+	if !utils.VerifyCompanyUserAccess(loginRole.RoleName, posStoreBranch.CompanyId, req.JwtPayload.CompanyId) {
+		return nil, errors.New("company users can only delete store branches within their company")
 	}
 
 	// Delete the store branch

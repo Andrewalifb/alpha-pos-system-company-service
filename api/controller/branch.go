@@ -95,6 +95,10 @@ func (c *posStoreBranchController) HandleReadPosStoreBranchRequest(ctx *gin.Cont
 
 func (c *posStoreBranchController) HandleUpdatePosStoreBranchRequest(ctx *gin.Context) {
 	var req pb.UpdatePosStoreBranchRequest
+
+	// Get branch ID from URL
+	branchID := ctx.Param("id")
+
 	if err := ctx.ShouldBindJSON(&req.PosStoreBranch); err != nil {
 		errorResponse := utils.BuildResponseFailed(dto.MESSAGE_FAILED_UPDATE_BRANCH, err.Error(), nil)
 		ctx.JSON(http.StatusBadRequest, errorResponse)
@@ -109,6 +113,8 @@ func (c *posStoreBranchController) HandleUpdatePosStoreBranchRequest(ctx *gin.Co
 		return
 	}
 
+	// Set Branh ID from req
+	req.PosStoreBranch.BranchId = branchID
 	// Add JWT payload from middleware into req body
 	req.JwtPayload = getJwtPayload.(*pb.JWTPayload)
 

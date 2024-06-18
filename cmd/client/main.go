@@ -1,9 +1,9 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/Andrewalifb/alpha-pos-system-company-service/api/controller"
 	pb "github.com/Andrewalifb/alpha-pos-system-company-service/api/proto"
@@ -15,18 +15,17 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-var (
-	addr = flag.String("addr", "localhost:50051", "the address to connect to")
-)
-
 func main() {
 	err := godotenv.Load(".env")
 	if err != nil {
 		fmt.Println("Error is occurred  on .env file please check")
 	}
-	flag.Parse()
 
-	conn, err := grpc.Dial(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	clientPort := os.Getenv("CLIENT_PORT")
+	serverPort := os.Getenv("SERVER_PORT")
+
+	addr := fmt.Sprintf("localhost:%s", serverPort)
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Fatalf("did not connect: %v", err)
 	}
@@ -49,7 +48,7 @@ func main() {
 	// Create a new router
 	r := gin.Default()
 
-	// Define your routes
+	// Define routes
 	routes.PosStoreBranchRoute(r, branchCtrl)
 	routes.PosCompanyRoutes(r, companyCtrl)
 	routes.PosRoleRoutes(r, roleCtrl)
@@ -57,5 +56,5 @@ func main() {
 	routes.PosUserRoutes(r, userCtrl)
 
 	// Start the server
-	r.Run(":8080")
+	r.Run(":" + clientPort)
 }

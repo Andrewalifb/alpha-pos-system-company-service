@@ -3,6 +3,7 @@ package repository
 import (
 	"errors"
 	"math"
+	"os"
 
 	pb "github.com/Andrewalifb/alpha-pos-system-company-service/api/proto"
 	"github.com/Andrewalifb/alpha-pos-system-company-service/dto"
@@ -32,6 +33,7 @@ func NewPosStoreBranchRepository(db *gorm.DB, redis *redis.Client) PosStoreBranc
 		redis: redis,
 	}
 }
+
 func (r *posStoreBranchRepository) CreatePosStoreBranch(posStoreBranch *entity.PosStoreBranch) error {
 	result := r.db.Create(posStoreBranch)
 	if result.Error != nil {
@@ -46,15 +48,12 @@ func (r *posStoreBranchRepository) ReadAllPosStoreBranches(pagination dto.Pagina
 
 	query := r.db.Model(&entity.PosStoreBranch{})
 
+	companyRole := os.Getenv("COMPANY_USER_ROLE")
+
 	switch roleName {
-	case "super user":
-		// No filters
-	case "company":
+
+	case companyRole:
 		query = query.Where("company_id = ?", jwtPayload.CompanyId)
-	case "branch":
-		query = query.Where("branch_id = ?", jwtPayload.BranchId)
-	case "store":
-		return nil, errors.New("store users are not allowed to retrieve roles")
 	default:
 		return nil, errors.New("invalid role")
 	}
@@ -79,6 +78,7 @@ func (r *posStoreBranchRepository) ReadAllPosStoreBranches(pagination dto.Pagina
 
 func (r *posStoreBranchRepository) ReadPosStoreBranch(branchID string) (*pb.PosStoreBranch, error) {
 	var posStoreBranchEntity entity.PosStoreBranch
+
 	if err := r.db.Where("branch_id = ?", branchID).First(&posStoreBranchEntity).Error; err != nil {
 		return nil, err
 	}

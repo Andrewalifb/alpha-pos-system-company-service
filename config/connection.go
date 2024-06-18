@@ -16,7 +16,6 @@ import (
 type Config struct {
 	SQLDB   *gorm.DB
 	RedisDB *redis.Client
-	// MongoDB *mongo.Client
 }
 
 func connectPostgres() *gorm.DB {
@@ -61,24 +60,9 @@ func connectRedis() *redis.Client {
 	}
 }
 
-// func connectMongo() *mongo.Client {
-// 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-// 	defer cancel()
-// 	mongoDB, err := mongo.Connect(ctx, options.Client().ApplyURI(os.Getenv("MONGO_URI")))
-
-// 	if err != nil {
-// 		fmt.Println("Failed to connect to MongoDB:", err)
-// 		return nil
-// 	} else {
-// 		fmt.Println("Successfully connected to MongoDB")
-// 		return mongoDB
-// 	}
-// }
-
 func NewConfig() *Config {
 	return &Config{
 		SQLDB:   connectPostgres(),
 		RedisDB: connectRedis(),
-		// MongoDB: connectMongo(),
 	}
 }

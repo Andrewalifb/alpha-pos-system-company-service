@@ -23,4 +23,6 @@ func PosStoreRoutes(r *gin.Engine, posStoreController controller.PosStoreControl
 	routesV1.DELETE("/pos_store/:id", posStoreController.HandleDeletePosStoreRequest)
 	// Get All PosStores
 	routesV1.GET("/pos_stores", posStoreController.HandleReadAllPosStoresRequest)
+	// Get Next Receipt ID for a Store
+	routesV1.GET("/pos_store/:id/next_receipt_id", posStoreController.HandleGetNextReceiptIDRequest)
 }

@@ -3,12 +3,14 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
 	"time"
 
 	pb "github.com/Andrewalifb/alpha-pos-system-company-service/api/proto"
 	"github.com/Andrewalifb/alpha-pos-system-company-service/dto"
 	"github.com/Andrewalifb/alpha-pos-system-company-service/entity"
 	"github.com/Andrewalifb/alpha-pos-system-company-service/pkg/repository"
+	"github.com/Andrewalifb/alpha-pos-system-company-service/utils"
 
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -20,6 +22,7 @@ type PosStoreService interface {
 	UpdatePosStore(ctx context.Context, req *pb.UpdatePosStoreRequest) (*pb.UpdatePosStoreResponse, error)
 	DeletePosStore(ctx context.Context, req *pb.DeletePosStoreRequest) (*pb.DeletePosStoreResponse, error)
 	ReadAllPosStores(ctx context.Context, req *pb.ReadAllPosStoresRequest) (*pb.ReadAllPosStoresResponse, error)
+	GetNextReceiptID(ctx context.Context, req *pb.GetNextReceiptIDRequest) (*pb.GetNextReceiptIDResponse, error)
 }
 
 type PosStoreServiceServer struct {
@@ -45,8 +48,29 @@ func (s *PosStoreServiceServer) CreatePosStore(ctx context.Context, req *pb.Crea
 		return nil, err
 	}
 
-	if loginRole.RoleName == "store" {
-		return nil, errors.New("store users are not allowed to create new store id")
+	if !utils.IsCompanyOrBranchUser(loginRole.RoleName) {
+		return nil, errors.New("users are not allowed to create store")
+	}
+
+	var companyID uuid.UUID
+	var branchID uuid.UUID
+
+	companyRole := os.Getenv("COMPANY_USER_ROLE")
+	branchRole := os.Getenv("BRANCH_USER_ROLE")
+
+	switch loginRole.RoleName {
+	case companyRole:
+		companyID = uuid.MustParse(req.JwtPayload.CompanyId)
+		if req.PosStore.BranchId == "" {
+			return nil, errors.New("error created store, branch id could not be empty")
+		} else {
+			branchID = uuid.MustParse(req.PosStore.BranchId)
+		}
+	case branchRole:
+		companyID = uuid.MustParse(req.JwtPayload.CompanyId)
+		branchID = uuid.MustParse(req.JwtPayload.BranchId)
+	default:
+		return nil, errors.New("invalid role for current user")
 	}
 
 	req.PosStore.StoreId = uuid.New().String() // Generate a new UUID for the store_id
@@ -59,9 +83,9 @@ func (s *PosStoreServiceServer) CreatePosStore(ctx context.Context, req *pb.Crea
 	gormStore := &entity.PosStore{
 		StoreID:   uuid.MustParse(req.PosStore.StoreId),
 		StoreName: req.PosStore.StoreName,
-		BranchID:  uuid.MustParse(req.JwtPayload.BranchId),
+		BranchID:  branchID,
 		Location:  req.PosStore.Location,
-		CompanyID: uuid.MustParse(req.JwtPayload.CompanyId),
+		CompanyID: companyID,
 		CreatedAt: req.PosStore.CreatedAt.AsTime(),
 		CreatedBy: uuid.MustParse(req.JwtPayload.UserId),
 		UpdatedAt: req.PosStore.UpdatedAt.AsTime(),
@@ -91,6 +115,11 @@ func (s *PosStoreServiceServer) ReadAllPosStores(ctx context.Context, req *pb.Re
 	loginRole, err := s.roleRepo.ReadPosRole(jwtRoleID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Role checker
+	if !utils.IsCompanyOrBranchUser(loginRole.RoleName) {
+		return nil, errors.New("users are not allowed to read all stores data")
 	}
 
 	paginationResult, err := s.storeRepo.ReadAllPosStores(pagination, loginRole.RoleName, req.JwtPayload)
@@ -125,12 +154,6 @@ func (s *PosStoreServiceServer) ReadAllPosStores(ctx context.Context, req *pb.Re
 }
 
 func (s *PosStoreServiceServer) ReadPosStore(ctx context.Context, req *pb.ReadPosStoreRequest) (*pb.ReadPosStoreResponse, error) {
-	// Get req data role name
-	posStore, err := s.storeRepo.ReadPosStore(req.StoreId)
-	if err != nil {
-		return nil, err
-	}
-
 	// Extract role ID from JWT payload
 	jwtRoleID := req.JwtPayload.Role
 
@@ -140,19 +163,35 @@ func (s *PosStoreServiceServer) ReadPosStore(ctx context.Context, req *pb.ReadPo
 		return nil, err
 	}
 
-	// Check if the role is "store"
-	if loginRole.RoleName == "store" {
-		return nil, errors.New("Store users are not allowed to retrieve stores")
+	if !utils.IsCompanyOrBranchOrStoreUser(loginRole.RoleName) {
+		return nil, errors.New("users are not allowed to retrieve store")
 	}
 
-	// Check if the role is "company" and the company IDs don't match
-	if loginRole.RoleName == "company" && posStore.CompanyId != req.JwtPayload.CompanyId {
-		return nil, errors.New("Company users can only retrieve stores within their company")
+	posStore, err := s.storeRepo.ReadPosStore(req.StoreId)
+	if err != nil {
+		return nil, err
 	}
 
-	// Check if the role is "branch" and the branch IDs don't match
-	if loginRole.RoleName == "branch" && posStore.BranchId != req.JwtPayload.BranchId {
-		return nil, errors.New("Branch users can only retrieve stores within their branch")
+	companyRole := os.Getenv("COMPANY_USER_ROLE")
+	branchRole := os.Getenv("BRANCH_USER_ROLE")
+	storeRole := os.Getenv("STORE_USER_ROLE")
+
+	if loginRole.RoleName == companyRole {
+		if !utils.VerifyCompanyUserAccess(loginRole.RoleName, posStore.CompanyId, req.JwtPayload.CompanyId) {
+			return nil, errors.New("company users can only retrieve stores within their company")
+		}
+	}
+
+	if loginRole.RoleName == branchRole {
+		if !utils.VerifyBranchUserAccess(loginRole.RoleName, posStore.BranchId, req.JwtPayload.BranchId) {
+			return nil, errors.New("branch users can only retrieve stores within their branch")
+		}
+	}
+
+	if loginRole.RoleName == storeRole {
+		if !utils.VerifyStoreUserAccess(loginRole.RoleName, posStore.StoreId, req.JwtPayload.StoreId) {
+			return nil, errors.New("store users can only retrieve stores within their branch")
+		}
 	}
 
 	return &pb.ReadPosStoreResponse{
@@ -170,9 +209,8 @@ func (s *PosStoreServiceServer) UpdatePosStore(ctx context.Context, req *pb.Upda
 		return nil, err
 	}
 
-	// Check if the role is "store"
-	if loginRole.RoleName == "store" {
-		return nil, errors.New("Store users are not allowed to update users")
+	if !utils.IsCompanyOrBranchUser(loginRole.RoleName) {
+		return nil, errors.New("users are not allowed to update store")
 	}
 
 	// Get the store to be updated
@@ -181,14 +219,19 @@ func (s *PosStoreServiceServer) UpdatePosStore(ctx context.Context, req *pb.Upda
 		return nil, err
 	}
 
-	// Check if the role is "company" and the company IDs don't match
-	if loginRole.RoleName == "company" && posStore.CompanyId != req.JwtPayload.CompanyId {
-		return nil, errors.New("Company users can only update stores within their company")
+	companyRole := os.Getenv("COMPANY_USER_ROLE")
+	branchRole := os.Getenv("BRANCH_USER_ROLE")
+
+	if loginRole.RoleName == companyRole {
+		if !utils.VerifyCompanyUserAccess(loginRole.RoleName, posStore.CompanyId, req.JwtPayload.CompanyId) {
+			return nil, errors.New("company users can only update stores within their company")
+		}
 	}
 
-	// Check if the role is "branch" and the branch IDs don't match
-	if loginRole.RoleName == "branch" && posStore.BranchId != req.JwtPayload.BranchId {
-		return nil, errors.New("Branch users can only update stores within their branch")
+	if loginRole.RoleName == branchRole {
+		if !utils.VerifyBranchUserAccess(loginRole.RoleName, posStore.BranchId, req.JwtPayload.BranchId) {
+			return nil, errors.New("branch users can only update stores within their branch")
+		}
 	}
 
 	now := timestamppb.New(time.Now())
@@ -197,15 +240,15 @@ func (s *PosStoreServiceServer) UpdatePosStore(ctx context.Context, req *pb.Upda
 
 	// Convert pb.PosStore to entity.PosStore
 	gormStore := &entity.PosStore{
-		StoreID:   uuid.MustParse(req.PosStore.StoreId),
+		StoreID:   uuid.MustParse(posStore.StoreId), // auto
 		StoreName: req.PosStore.StoreName,
-		BranchID:  uuid.MustParse(req.PosStore.BranchId),
+		BranchID:  uuid.MustParse(posStore.BranchId), // auto
 		Location:  req.PosStore.Location,
-		CompanyID: uuid.MustParse(req.PosStore.CompanyId),
-		CreatedAt: posStore.CreatedAt.AsTime(),
-		CreatedBy: uuid.MustParse(posStore.CreatedBy),
-		UpdatedAt: req.PosStore.UpdatedAt.AsTime(),
-		UpdatedBy: uuid.MustParse(req.PosStore.UpdatedBy),
+		CompanyID: uuid.MustParse(posStore.CompanyId),     // auto
+		CreatedAt: posStore.CreatedAt.AsTime(),            // auto
+		CreatedBy: uuid.MustParse(posStore.CreatedBy),     // auto
+		UpdatedAt: req.PosStore.UpdatedAt.AsTime(),        // auto
+		UpdatedBy: uuid.MustParse(req.PosStore.UpdatedBy), // auto
 	}
 
 	// Update the store
@@ -229,9 +272,8 @@ func (s *PosStoreServiceServer) DeletePosStore(ctx context.Context, req *pb.Dele
 		return nil, err
 	}
 
-	// Check if the role is "store"
-	if loginRole.RoleName == "store" {
-		return nil, errors.New("Store users are not allowed to delete stores")
+	if !utils.IsCompanyUser(loginRole.RoleName) && !utils.IsBranchUser(loginRole.RoleName) {
+		return nil, errors.New("users are not allowed to delete stores")
 	}
 
 	// Get the store to be deleted
@@ -240,14 +282,19 @@ func (s *PosStoreServiceServer) DeletePosStore(ctx context.Context, req *pb.Dele
 		return nil, err
 	}
 
-	// Check if the role is "company" and the company IDs don't match
-	if loginRole.RoleName == "company" && posStore.CompanyId != req.JwtPayload.CompanyId {
-		return nil, errors.New("Company users can only delete stores within their company")
+	companyRole := os.Getenv("COMPANY_USER_ROLE")
+	branchRole := os.Getenv("BRANCH_USER_ROLE")
+
+	if loginRole.RoleName == companyRole {
+		if !utils.VerifyCompanyUserAccess(loginRole.RoleName, posStore.CompanyId, req.JwtPayload.CompanyId) {
+			return nil, errors.New("company users can only delete stores within their company")
+		}
 	}
 
-	// Check if the role is "branch" and the branch IDs don't match
-	if loginRole.RoleName == "branch" && posStore.BranchId != req.JwtPayload.BranchId {
-		return nil, errors.New("Branch users can only delete stores within their branch")
+	if loginRole.RoleName == branchRole {
+		if !utils.VerifyBranchUserAccess(loginRole.RoleName, posStore.BranchId, req.JwtPayload.BranchId) {
+			return nil, errors.New("branch users can only delete stores within their branch")
+		}
 	}
 
 	// Delete the store
@@ -258,5 +305,15 @@ func (s *PosStoreServiceServer) DeletePosStore(ctx context.Context, req *pb.Dele
 
 	return &pb.DeletePosStoreResponse{
 		Success: true,
+	}, nil
+}
+
+func (s *PosStoreServiceServer) GetNextReceiptID(ctx context.Context, req *pb.GetNextReceiptIDRequest) (*pb.GetNextReceiptIDResponse, error) {
+	receiptID, err := s.storeRepo.GetNextReceiptID(req.StoreId)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.GetNextReceiptIDResponse{
+		ReceiptId: int32(receiptID),
 	}, nil
 }

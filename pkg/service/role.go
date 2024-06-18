@@ -9,6 +9,7 @@ import (
 	"github.com/Andrewalifb/alpha-pos-system-company-service/dto"
 	"github.com/Andrewalifb/alpha-pos-system-company-service/entity"
 	"github.com/Andrewalifb/alpha-pos-system-company-service/pkg/repository"
+	"github.com/Andrewalifb/alpha-pos-system-company-service/utils"
 
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -43,9 +44,8 @@ func (s *PosRoleServiceServer) CreatePosRole(ctx context.Context, req *pb.Create
 		return nil, err
 	}
 
-	// Check if the role is "store"
-	if loginRole.RoleName != "super user" {
-		return nil, errors.New("users are not allowed to update roles")
+	if !utils.IsSuperUser(loginRole.RoleName) {
+		return nil, errors.New("users are not allowed to create roles")
 	}
 
 	req.PosRole.RoleId = uuid.New().String() // Generate a new UUID for the role_id
@@ -87,6 +87,10 @@ func (s *PosRoleServiceServer) ReadAllPosRoles(ctx context.Context, req *pb.Read
 	loginRole, err := s.repo.ReadPosRole(jwtRoleID)
 	if err != nil {
 		return nil, err
+	}
+
+	if !utils.IsSuperUserOrCompany(loginRole.RoleName) {
+		return nil, errors.New("users are not allowed to retrieve all roles")
 	}
 
 	paginationResult, err := s.repo.ReadAllPosRoles(pagination, loginRole.RoleName, req.JwtPayload)
@@ -133,9 +137,8 @@ func (s *PosRoleServiceServer) ReadPosRole(ctx context.Context, req *pb.ReadPosR
 		return nil, err
 	}
 
-	// Check if the role is "store"
-	if loginRole.RoleName == "store" {
-		return nil, errors.New("Store users are not allowed to retrieve roles")
+	if !utils.IsSuperUser(loginRole.RoleName) && !utils.IsCompanyOrBranchOrStoreUser(loginRole.RoleName) {
+		return nil, errors.New("users are not allowed to retrieve roles")
 	}
 
 	// Convert entity.PosRole to pb.PosRole
@@ -163,8 +166,7 @@ func (s *PosRoleServiceServer) UpdatePosRole(ctx context.Context, req *pb.Update
 		return nil, err
 	}
 
-	// Check if the role is "store"
-	if loginRole.RoleName != "super user" {
+	if !utils.IsSuperUser(loginRole.RoleName) {
 		return nil, errors.New("users are not allowed to update roles")
 	}
 
@@ -180,12 +182,12 @@ func (s *PosRoleServiceServer) UpdatePosRole(ctx context.Context, req *pb.Update
 
 	// Convert pb.PosRole to entity.PosRole
 	gormRole := &entity.PosRole{
-		RoleID:    uuid.MustParse(req.PosRole.RoleId),
+		RoleID:    uuid.MustParse(posRole.RoleId), // auto
 		RoleName:  req.PosRole.RoleName,
-		CreatedAt: posRole.CreatedAt.AsTime(),
-		CreatedBy: uuid.MustParse(posRole.CreatedBy),
-		UpdatedAt: req.PosRole.UpdatedAt.AsTime(),
-		UpdatedBy: uuid.MustParse(req.PosRole.UpdatedBy),
+		CreatedAt: posRole.CreatedAt.AsTime(),            // auto
+		CreatedBy: uuid.MustParse(posRole.CreatedBy),     // auto
+		UpdatedAt: req.PosRole.UpdatedAt.AsTime(),        // auto
+		UpdatedBy: uuid.MustParse(req.PosRole.UpdatedBy), // auto
 	}
 
 	// Update the role
@@ -209,8 +211,7 @@ func (s *PosRoleServiceServer) DeletePosRole(ctx context.Context, req *pb.Delete
 		return nil, err
 	}
 
-	// Check if the role is "store"
-	if loginRole.RoleName != "super user" {
+	if !utils.IsSuperUser(loginRole.RoleName) {
 		return nil, errors.New("users are not allowed to delete roles")
 	}
 

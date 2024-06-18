@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 
 	pb "github.com/Andrewalifb/alpha-pos-system-company-service/api/proto"
 	"github.com/Andrewalifb/alpha-pos-system-company-service/config"
@@ -37,7 +38,13 @@ func main() {
 	userSvc := service.NewPosUserServiceServer(userRepo, roleRepo)
 	// userSvc := service.NewPosUserServiceServer(userRepo, roleRepo)
 
-	lis, err := net.Listen("tcp", ":50051")
+	port := os.Getenv("SERVER_PORT")
+
+	// Construct the address string
+	addr := fmt.Sprintf(":%s", port)
+
+	// Start listening on the specified port
+	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("Failed to listen: %v", err)
 	}
