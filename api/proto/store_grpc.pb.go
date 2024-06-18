@@ -27,6 +27,7 @@ type PosStoreServiceClient interface {
 	UpdatePosStore(ctx context.Context, in *UpdatePosStoreRequest, opts ...grpc.CallOption) (*UpdatePosStoreResponse, error)
 	DeletePosStore(ctx context.Context, in *DeletePosStoreRequest, opts ...grpc.CallOption) (*DeletePosStoreResponse, error)
 	ReadAllPosStores(ctx context.Context, in *ReadAllPosStoresRequest, opts ...grpc.CallOption) (*ReadAllPosStoresResponse, error)
+	GetNextReceiptID(ctx context.Context, in *GetNextReceiptIDRequest, opts ...grpc.CallOption) (*GetNextReceiptIDResponse, error)
 }
 
 type posStoreServiceClient struct {
@@ -82,6 +83,15 @@ func (c *posStoreServiceClient) ReadAllPosStores(ctx context.Context, in *ReadAl
 	return out, nil
 }
 
+func (c *posStoreServiceClient) GetNextReceiptID(ctx context.Context, in *GetNextReceiptIDRequest, opts ...grpc.CallOption) (*GetNextReceiptIDResponse, error) {
+	out := new(GetNextReceiptIDResponse)
+	err := c.cc.Invoke(ctx, "/pos.PosStoreService/GetNextReceiptID", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PosStoreServiceServer is the server API for PosStoreService service.
 // All implementations must embed UnimplementedPosStoreServiceServer
 // for forward compatibility
@@ -91,6 +101,7 @@ type PosStoreServiceServer interface {
 	UpdatePosStore(context.Context, *UpdatePosStoreRequest) (*UpdatePosStoreResponse, error)
 	DeletePosStore(context.Context, *DeletePosStoreRequest) (*DeletePosStoreResponse, error)
 	ReadAllPosStores(context.Context, *ReadAllPosStoresRequest) (*ReadAllPosStoresResponse, error)
+	GetNextReceiptID(context.Context, *GetNextReceiptIDRequest) (*GetNextReceiptIDResponse, error)
 	mustEmbedUnimplementedPosStoreServiceServer()
 }
 
@@ -112,6 +123,9 @@ func (UnimplementedPosStoreServiceServer) DeletePosStore(context.Context, *Delet
 }
 func (UnimplementedPosStoreServiceServer) ReadAllPosStores(context.Context, *ReadAllPosStoresRequest) (*ReadAllPosStoresResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ReadAllPosStores not implemented")
+}
+func (UnimplementedPosStoreServiceServer) GetNextReceiptID(context.Context, *GetNextReceiptIDRequest) (*GetNextReceiptIDResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetNextReceiptID not implemented")
 }
 func (UnimplementedPosStoreServiceServer) mustEmbedUnimplementedPosStoreServiceServer() {}
 
@@ -216,6 +230,24 @@ func _PosStoreService_ReadAllPosStores_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PosStoreService_GetNextReceiptID_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetNextReceiptIDRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PosStoreServiceServer).GetNextReceiptID(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/pos.PosStoreService/GetNextReceiptID",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PosStoreServiceServer).GetNextReceiptID(ctx, req.(*GetNextReceiptIDRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PosStoreService_ServiceDesc is the grpc.ServiceDesc for PosStoreService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -242,6 +274,10 @@ var PosStoreService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReadAllPosStores",
 			Handler:    _PosStoreService_ReadAllPosStores_Handler,
+		},
+		{
+			MethodName: "GetNextReceiptID",
+			Handler:    _PosStoreService_GetNextReceiptID_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

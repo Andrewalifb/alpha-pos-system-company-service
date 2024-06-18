@@ -3,13 +3,13 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	pb "github.com/Andrewalifb/alpha-pos-system-company-service/api/proto"
 	"github.com/Andrewalifb/alpha-pos-system-company-service/dto"
 	"github.com/Andrewalifb/alpha-pos-system-company-service/entity"
 	"github.com/Andrewalifb/alpha-pos-system-company-service/pkg/repository"
+	"github.com/Andrewalifb/alpha-pos-system-company-service/utils"
 
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -45,9 +45,9 @@ func (s *PosCompanyServiceServer) CreatePosCompany(ctx context.Context, req *pb.
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println("LOGIN ROLE :", loginRole.RoleName)
-	// Check if the role is "super user"
-	if loginRole.RoleName != "super user" {
+
+	// Role check
+	if !utils.IsSuperUser(loginRole.RoleName) {
 		return nil, errors.New("users are not allowed to create company roles")
 	}
 
@@ -92,6 +92,11 @@ func (s *PosCompanyServiceServer) ReadAllPosCompanies(ctx context.Context, req *
 		return nil, err
 	}
 
+	// Role check
+	if !utils.IsSuperUser(loginRole.RoleName) {
+		return nil, errors.New("users are not allowed to read company roles")
+	}
+
 	paginationResult, err := s.companyRepo.ReadAllPosCompanies(pagination, loginRole.RoleName, req.JwtPayload)
 	if err != nil {
 		return nil, err
@@ -121,11 +126,6 @@ func (s *PosCompanyServiceServer) ReadAllPosCompanies(ctx context.Context, req *
 }
 
 func (s *PosCompanyServiceServer) ReadPosCompany(ctx context.Context, req *pb.ReadPosCompanyRequest) (*pb.ReadPosCompanyResponse, error) {
-	// Get req data role name
-	posCompany, err := s.companyRepo.ReadPosCompany(req.CompanyId)
-	if err != nil {
-		return nil, err
-	}
 
 	// Extract role ID from JWT payload
 	jwtRoleID := req.JwtPayload.Role
@@ -136,14 +136,20 @@ func (s *PosCompanyServiceServer) ReadPosCompany(ctx context.Context, req *pb.Re
 		return nil, err
 	}
 
-	// Check if the role is "store" or "branch"
-	if loginRole.RoleName == "store" || loginRole.RoleName == "branch" {
-		return nil, errors.New("users are not allowed to retrieve companies")
+	// Role check
+	if !utils.IsSuperUserOrCompany(loginRole.RoleName) {
+		return nil, errors.New("users are not allowed to read company role")
 	}
 
-	// Check if the role is "company" and the company IDs don't match
-	if loginRole.RoleName == "company" && posCompany.CompanyId != req.JwtPayload.CompanyId {
-		return nil, errors.New("Company users can only retrieve companies within their company")
+	// Get company data by ID
+	posCompany, err := s.companyRepo.ReadPosCompany(req.CompanyId)
+	if err != nil {
+		return nil, err
+	}
+
+	// Verify data access
+	if !utils.VerifyCompanyUserAccess(loginRole.RoleName, posCompany.CompanyId, req.JwtPayload.CompanyId) {
+		return nil, errors.New("company users can only retrieve their company data")
 	}
 
 	return &pb.ReadPosCompanyResponse{
@@ -152,7 +158,6 @@ func (s *PosCompanyServiceServer) ReadPosCompany(ctx context.Context, req *pb.Re
 }
 
 func (s *PosCompanyServiceServer) UpdatePosCompany(ctx context.Context, req *pb.UpdatePosCompanyRequest) (*pb.UpdatePosCompanyResponse, error) {
-	// Get the role name from the role ID in the JWT payload
 	// Extract role ID from JWT payload
 	jwtRoleID := req.JwtPayload.Role
 
@@ -162,9 +167,9 @@ func (s *PosCompanyServiceServer) UpdatePosCompany(ctx context.Context, req *pb.
 		return nil, err
 	}
 
-	// Check if the role is "store"
-	if loginRole.RoleName != "super user" {
-		return nil, errors.New("Store users are not allowed to update companies")
+	// Role check
+	if !utils.IsSuperUser(loginRole.RoleName) {
+		return nil, errors.New("users are not allowed to update companies")
 	}
 
 	// Get the company to be updated
@@ -177,12 +182,12 @@ func (s *PosCompanyServiceServer) UpdatePosCompany(ctx context.Context, req *pb.
 	req.PosCompany.UpdatedAt = now
 
 	newCompanyData := &entity.PosCompany{
-		CompanyID:   uuid.MustParse(posCompany.CompanyId),
+		CompanyID:   uuid.MustParse(posCompany.CompanyId), // auto
 		CompanyName: req.PosCompany.CompanyName,
-		CreatedAt:   posCompany.CreatedAt.AsTime(),
-		CreatedBy:   uuid.MustParse(posCompany.CreatedBy),
-		UpdatedAt:   req.PosCompany.UpdatedAt.AsTime(),
-		UpdatedBy:   uuid.MustParse(req.JwtPayload.UserId),
+		CreatedAt:   posCompany.CreatedAt.AsTime(),         // auto
+		CreatedBy:   uuid.MustParse(posCompany.CreatedBy),  // auto
+		UpdatedAt:   req.PosCompany.UpdatedAt.AsTime(),     // auto
+		UpdatedBy:   uuid.MustParse(req.JwtPayload.UserId), // auto
 	}
 	// Update the company
 	posCompany, err = s.companyRepo.UpdatePosCompany(newCompanyData)
@@ -194,6 +199,7 @@ func (s *PosCompanyServiceServer) UpdatePosCompany(ctx context.Context, req *pb.
 		PosCompany: posCompany,
 	}, nil
 }
+
 func (s *PosCompanyServiceServer) DeletePosCompany(ctx context.Context, req *pb.DeletePosCompanyRequest) (*pb.DeletePosCompanyResponse, error) {
 	// Extract role ID from JWT payload
 	jwtRoleID := req.JwtPayload.Role
@@ -204,8 +210,8 @@ func (s *PosCompanyServiceServer) DeletePosCompany(ctx context.Context, req *pb.
 		return nil, err
 	}
 
-	// Check if the role is "store"
-	if loginRole.RoleName != "super user" {
+	// Role check
+	if !utils.IsSuperUser(loginRole.RoleName) {
 		return nil, errors.New("users are not allowed to delete companies")
 	}
 

@@ -71,6 +71,16 @@ message ReadAllPosStoresResponse {
   int64 count = 5;
 }
 
+
+message GetNextReceiptIDRequest {
+  string store_id = 1;
+  JWTPayload jwt_payload = 2;
+}
+
+message GetNextReceiptIDResponse {
+  int32 receipt_id = 1;
+}
+
 // PosStoreService
 service PosStoreService {
   rpc CreatePosStore(CreatePosStoreRequest) returns (CreatePosStoreResponse);
@@ -78,4 +88,5 @@ service PosStoreService {
   rpc UpdatePosStore(UpdatePosStoreRequest) returns (UpdatePosStoreResponse);
   rpc DeletePosStore(DeletePosStoreRequest) returns (DeletePosStoreResponse);
   rpc ReadAllPosStores(ReadAllPosStoresRequest) returns (ReadAllPosStoresResponse);
+  rpc GetNextReceiptID(GetNextReceiptIDRequest) returns (GetNextReceiptIDResponse); // New method
 }

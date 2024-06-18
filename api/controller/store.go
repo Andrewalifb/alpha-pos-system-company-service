@@ -17,6 +17,7 @@ type PosStoreController interface {
 	HandleUpdatePosStoreRequest(c *gin.Context)
 	HandleDeletePosStoreRequest(c *gin.Context)
 	HandleReadAllPosStoresRequest(c *gin.Context)
+	HandleGetNextReceiptIDRequest(c *gin.Context)
 }
 
 type posStoreController struct {
@@ -95,6 +96,9 @@ func (c *posStoreController) HandleReadPosStoreRequest(ctx *gin.Context) {
 
 func (c *posStoreController) HandleUpdatePosStoreRequest(ctx *gin.Context) {
 	var req pb.UpdatePosStoreRequest
+	// Get store ID from URL
+	storeID := ctx.Param("id")
+
 	if err := ctx.ShouldBindJSON(&req.PosStore); err != nil {
 		errorResponse := utils.BuildResponseFailed(dto.MESSAGE_FAILED_UPDATE_STORE, err.Error(), nil)
 		ctx.JSON(http.StatusBadRequest, errorResponse)
@@ -108,7 +112,8 @@ func (c *posStoreController) HandleUpdatePosStoreRequest(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, errorResponse)
 		return
 	}
-
+	// Set Store ID from body req
+	req.PosStore.StoreId = storeID
 	// Add JWT payload from middleware into req body
 	req.JwtPayload = getJwtPayload.(*pb.JWTPayload)
 
@@ -201,5 +206,23 @@ func (c *posStoreController) HandleReadAllPosStoresRequest(ctx *gin.Context) {
 	}
 
 	successResponse := utils.BuildResponseSuccess(dto.MESSAGE_SUCCESS_GET_STORE, res)
+	ctx.JSON(http.StatusOK, successResponse)
+}
+
+func (c *posStoreController) HandleGetNextReceiptIDRequest(ctx *gin.Context) {
+	var req pb.GetNextReceiptIDRequest
+
+	// Get store ID from URL
+	storeID := ctx.Param("id")
+	req.StoreId = storeID
+
+	res, err := c.service.GetNextReceiptID(ctx, &req)
+	if err != nil {
+		errorResponse := utils.BuildResponseFailed(dto.MESSAGE_FAILED_GET_RECEIPT_ID, err.Error(), nil)
+		ctx.JSON(http.StatusInternalServerError, errorResponse)
+		return
+	}
+
+	successResponse := utils.BuildResponseSuccess(dto.MESSAGE_SUCCESS_GET_RECEIPT_ID, res)
 	ctx.JSON(http.StatusOK, successResponse)
 }

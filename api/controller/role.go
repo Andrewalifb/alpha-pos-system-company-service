@@ -95,6 +95,10 @@ func (c *posRoleController) HandleReadPosRoleRequest(ctx *gin.Context) {
 
 func (c *posRoleController) HandleUpdatePosRoleRequest(ctx *gin.Context) {
 	var req pb.UpdatePosRoleRequest
+
+	// Get role ID from URL
+	roleID := ctx.Param("id")
+
 	if err := ctx.ShouldBindJSON(&req.PosRole); err != nil {
 		errorResponse := utils.BuildResponseFailed(dto.MESSAGE_FAILED_UPDATE_ROLE, err.Error(), nil)
 		ctx.JSON(http.StatusBadRequest, errorResponse)
@@ -109,6 +113,8 @@ func (c *posRoleController) HandleUpdatePosRoleRequest(ctx *gin.Context) {
 		return
 	}
 
+	// Set Role id into body req
+	req.PosRole.RoleId = roleID
 	// Add JWT payload from middleware into req body
 	req.JwtPayload = getJwtPayload.(*pb.JWTPayload)
 

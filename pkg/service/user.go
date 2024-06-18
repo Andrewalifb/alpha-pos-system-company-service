@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
+	"strings"
 	"time"
 
 	middleware "github.com/Andrewalifb/alpha-pos-system-company-service/api/midlleware"
@@ -16,6 +18,8 @@ import (
 
 	jwt "github.com/dgrijalva/jwt-go"
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"golang.org/x/crypto/bcrypt"
@@ -53,31 +57,65 @@ func (s *PosUserServiceServer) CreatePosUser(ctx context.Context, req *pb.Create
 		return nil, err
 	}
 
+	if !utils.IsSuperUser(loginRole.RoleName) && !utils.IsCompanyOrBranchUser(loginRole.RoleName) {
+		return nil, errors.New("users cant create new user")
+	}
+
+	// Check if username has been avaliable on database
+	isUsernameExist, err := s.userRepo.IsUsernameExist(strings.ToLower(req.PosUser.Username))
+	if err != nil {
+		// Log the error and return a user-friendly message
+		log.Printf("Error checking if username exists: %v", err)
+		return nil, status.Error(codes.Internal, "Internal server error")
+	}
+	if isUsernameExist {
+		return nil, status.Error(codes.AlreadyExists, fmt.Sprintf("%s has been available on database, username must be unique", req.PosUser.Username))
+	}
+
+	// Email Validation
+	if !utils.IsValidEmail(req.PosUser.Email) {
+		return nil, errors.New(fmt.Sprintf("email %s is not valid", req.PosUser.Email))
+	}
+
+	// Check if email has been avaliable on database
+	isEmailExist, err := s.userRepo.IsEmailExist(strings.ToLower(req.PosUser.Email))
+	if err != nil {
+		// Log the error and return a user-friendly message
+		log.Printf("Error checking if email exists: %v", err)
+		return nil, status.Error(codes.Internal, "Internal server error")
+	}
+	if isEmailExist {
+		return nil, status.Error(codes.AlreadyExists, fmt.Sprintf("%s has been available on database, email must be unique", req.PosUser.Email))
+	}
+
 	// Get req data role name
 	reqCreatedRole, err := s.roleRepo.ReadPosRole(req.PosUser.RoleId)
 	if err != nil {
 		return nil, err
 	}
 
-	// Check role ID to determine what kind of user can be created
-	switch loginRole.RoleName {
-	case "super user":
+	superUserRole := os.Getenv("SUPER_USER_ROLE")
+	companyRole := os.Getenv("COMPANY_USER_ROLE")
+	branchRole := os.Getenv("BRANCH_USER_ROLE")
+	storeRole := os.Getenv("STORE_USER_ROLE")
 
-	case "company":
-		// Company level user can create Branch and Store level users
-		if reqCreatedRole.RoleName != "branch" && reqCreatedRole.RoleName != "store" {
-			return nil, errors.New("A Company role can only create Branch and Store roles")
+	switch loginRole.RoleName {
+	case superUserRole:
+		if reqCreatedRole.RoleName != companyRole {
+			return nil, errors.New("a Super User role can only create Company user")
 		}
-	case "branch":
-		// Branch level user can only create Store level users
-		if reqCreatedRole.RoleName != "store" {
-			return nil, errors.New("A Branch role can only create Store roles")
+	case companyRole:
+		if reqCreatedRole.RoleName != branchRole && reqCreatedRole.RoleName != storeRole {
+			return nil, errors.New("a Company role can only create Branch and Store user")
 		}
-	case "store":
-		// Store level user cannot create any users
-		return nil, errors.New("A Store role cannot create new users")
+	case branchRole:
+		if reqCreatedRole.RoleName != storeRole {
+			return nil, errors.New("a Branch role can only create Store user")
+		}
+	case storeRole:
+		return nil, errors.New("a Store role cannot create new user")
 	default:
-		return nil, errors.New("Invalid role for current user")
+		return nil, errors.New("invalid role for current user")
 	}
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.PosUser.PasswordHash), bcrypt.DefaultCost)
@@ -110,28 +148,76 @@ func (s *PosUserServiceServer) CreatePosUser(ctx context.Context, req *pb.Create
 		UpdatedBy:    uuid.MustParse(req.JwtPayload.UserId),
 	}
 
-	if req.PosUser.CompanyId != "" {
-		gormUser.CompanyID = utils.ParseUUID(req.PosUser.CompanyId)
-	} else {
-		gormUser.CompanyID = nil
-	}
+	switch reqCreatedRole.RoleName {
+	// Create user for company role
+	case companyRole:
+		if loginRole.RoleName == superUserRole {
+			// Company ID should not be empty
+			if req.PosUser.CompanyId == "" {
+				return nil, errors.New("error created user role name company, company id could not be empty")
+			} else {
+				gormUser.CompanyID = utils.ParseUUID(req.PosUser.CompanyId)
+			}
+			// Branch ID should be empty
+			gormUser.BranchID = nil
+			// Store ID should be empty
+			gormUser.StoreID = nil
+		}
+	// Create user for branch role
+	case branchRole:
+		if loginRole.RoleName == companyRole {
+			// Set company ID from jwt payload
+			gormUser.CompanyID = utils.ParseUUID(req.JwtPayload.CompanyId)
 
-	if req.PosUser.BranchId != "" {
-		gormUser.BranchID = utils.ParseUUID(req.PosUser.BranchId)
-	} else {
-		gormUser.BranchID = nil
-	}
+			// Set Branch ID from req body
+			if req.PosUser.BranchId == "" {
+				return nil, errors.New("error created user role name branch, branch id could not be empty")
+			} else {
+				gormUser.BranchID = utils.ParseUUID(req.PosUser.BranchId)
+			}
+			// Store ID should be empty
+			gormUser.StoreID = nil
+		}
+	// Create user for store role
+	case storeRole:
+		// if user role that want to create store user is company role
+		if loginRole.RoleName == companyRole {
+			// Set Company ID from jwt payload
+			gormUser.CompanyID = utils.ParseUUID(req.JwtPayload.CompanyId)
+			// Set Branch ID from req body
+			if req.PosUser.BranchId == "" {
+				return nil, errors.New("error created user role name store, branch id could not be empty")
+			} else {
+				gormUser.BranchID = utils.ParseUUID(req.PosUser.BranchId)
+			}
+			// Set Store ID from req body
+			if req.PosUser.StoreId == "" {
+				return nil, errors.New("error created user role name store, store id could not be empty")
+			} else {
+				gormUser.StoreID = utils.ParseUUID(req.PosUser.StoreId)
+			}
+		}
 
-	if req.PosUser.StoreId != "" {
-		gormUser.StoreID = utils.ParseUUID(req.PosUser.StoreId)
-	} else {
-		gormUser.StoreID = nil
+		// if user role that want to create store user is branch role
+		if loginRole.RoleName == branchRole {
+			// Set Company ID from jwt payload
+			gormUser.CompanyID = utils.ParseUUID(req.JwtPayload.CompanyId)
+			// Set branch ID from jwt payload
+			gormUser.BranchID = utils.ParseUUID(req.JwtPayload.BranchId)
+			// Set Store ID from req body
+			if req.PosUser.StoreId == "" {
+				return nil, errors.New("error created user role name store, store id could not be empty")
+			} else {
+				gormUser.StoreID = utils.ParseUUID(req.PosUser.StoreId)
+			}
+		}
 	}
 
 	err = s.userRepo.CreatePosUser(gormUser)
 	if err != nil {
 		return nil, err
 	}
+
 	req.PosUser.PasswordHash = ""
 	return &pb.CreatePosUserResponse{
 		PosUser: req.PosUser,
@@ -140,7 +226,7 @@ func (s *PosUserServiceServer) CreatePosUser(ctx context.Context, req *pb.Create
 
 func (s *PosUserServiceServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.LoginResponse, error) {
 	var secretKey = os.Getenv("SECRET_KEY")
-	fmt.Println("LOGIN SECRET : ", secretKey)
+	// fmt.Println("LOGIN SECRET : ", secretKey)
 	user, err := s.userRepo.ReadPosUserByUsername(req.Username)
 	if err != nil {
 		return nil, err
@@ -150,7 +236,10 @@ func (s *PosUserServiceServer) Login(ctx context.Context, req *pb.LoginRequest) 
 	if err != nil {
 		return nil, err
 	}
+
 	expectedIssuer := os.Getenv("ISSUER")
+	expectedAudience := os.Getenv("AUDIENCE")
+
 	claims := &middleware.JWTPayloadWithClaims{
 		JWTPayload: &pb.JWTPayload{
 			Name:      user.FirstName + " " + user.LastName,
@@ -160,7 +249,7 @@ func (s *PosUserServiceServer) Login(ctx context.Context, req *pb.LoginRequest) 
 			StoreId:   user.StoreId,
 			UserId:    user.UserId,
 			StandardClaims: &pb.StandardClaims{
-				Audience:  "Alpha Pos System",
+				Audience:  expectedAudience,
 				ExpiresAt: time.Now().Add(time.Hour * 24).Unix(),
 				Id:        user.CompanyId,
 				IssuedAt:  time.Now().Unix(),
@@ -197,33 +286,16 @@ func (s *PosUserServiceServer) ReadAllPosUsers(ctx context.Context, req *pb.Read
 		return nil, err
 	}
 
+	if !utils.IsCompanyOrBranchOrStoreUser(loginRole.RoleName) {
+		return nil, errors.New("users are not allowed to read all users data")
+	}
+
 	paginationResult, err := s.userRepo.ReadAllPosUsers(pagination, loginRole.RoleName, req.JwtPayload)
 	if err != nil {
 		return nil, err
 	}
 
-	posUsers := paginationResult.Records.([]entity.PosUser)
-	pbPosUsers := make([]*pb.PosUser, len(posUsers))
-
-	for i, posUser := range posUsers {
-		pbPosUsers[i] = &pb.PosUser{
-			UserId:       posUser.UserID.String(),
-			Username:     posUser.Username,
-			PasswordHash: posUser.PasswordHash,
-			RoleId:       posUser.RoleID.String(),
-			CompanyId:    posUser.CompanyID.String(),
-			BranchId:     posUser.BranchID.String(),
-			StoreId:      posUser.StoreID.String(),
-			FirstName:    posUser.FirstName,
-			LastName:     posUser.LastName,
-			Email:        posUser.Email,
-			PhoneNumber:  posUser.PhoneNumber,
-			CreatedAt:    timestamppb.New(posUser.CreatedAt),
-			CreatedBy:    posUser.CreatedBy.String(),
-			UpdatedAt:    timestamppb.New(posUser.UpdatedAt),
-			UpdatedBy:    posUser.UpdatedBy.String(),
-		}
-	}
+	pbPosUsers := paginationResult.Records.([]*pb.PosUser)
 
 	return &pb.ReadAllPosUsersResponse{
 		PosUsers: pbPosUsers,
@@ -235,12 +307,6 @@ func (s *PosUserServiceServer) ReadAllPosUsers(ctx context.Context, req *pb.Read
 }
 
 func (s *PosUserServiceServer) ReadPosUser(ctx context.Context, req *pb.ReadPosUserRequest) (*pb.ReadPosUserResponse, error) {
-	// Get req data role name
-	posUser, err := s.userRepo.ReadPosUser(req.UserId)
-	if err != nil {
-		return nil, err
-	}
-
 	// Extract role ID from JWT payload
 	jwtRoleID := req.JwtPayload.Role
 
@@ -250,28 +316,44 @@ func (s *PosUserServiceServer) ReadPosUser(ctx context.Context, req *pb.ReadPosU
 		return nil, err
 	}
 
-	// Check if the role is "store"
-	if loginRole.RoleName == "store" {
-		return nil, errors.New("Store users are not allowed to retrieve users")
+	if !utils.IsCompanyOrBranchOrStoreUser(loginRole.RoleName) {
+		return nil, errors.New("users are not allowed to read users data")
 	}
 
-	// Check if the role is "company" and the company IDs don't match
-	if loginRole.RoleName == "company" && posUser.CompanyId != req.JwtPayload.CompanyId {
-		return nil, errors.New("Company users can only retrieve users within their company")
+	posUser, err := s.userRepo.ReadPosUser(req.UserId)
+	if err != nil {
+		return nil, err
 	}
 
-	// Check if the role is "branch" and the branch IDs don't match
-	if loginRole.RoleName == "branch" && posUser.BranchId != req.JwtPayload.BranchId {
-		return nil, errors.New("Branch users can only retrieve users within their branch")
+	companyRole := os.Getenv("COMPANY_USER_ROLE")
+	branchRole := os.Getenv("BRANCH_USER_ROLE")
+	storeRole := os.Getenv("STORE_USER_ROLE")
+
+	if loginRole.RoleName == companyRole {
+		if !utils.VerifyCompanyUserAccess(loginRole.RoleName, posUser.CompanyId, req.JwtPayload.CompanyId) {
+			return nil, errors.New("company users can only retrieve users within their company")
+		}
 	}
 
+	if loginRole.RoleName == branchRole {
+		if !utils.VerifyBranchUserAccess(loginRole.RoleName, posUser.BranchId, req.JwtPayload.BranchId) {
+			return nil, errors.New("branch users can only retrieve users within their branch")
+		}
+	}
+
+	if loginRole.RoleName == storeRole {
+		if !utils.VerifyStoreUserAccess(loginRole.RoleName, posUser.StoreId, req.JwtPayload.StoreId) {
+			return nil, errors.New("store users can only retrieve users within their branch")
+		}
+	}
+
+	posUser.PasswordHash = ""
 	return &pb.ReadPosUserResponse{
 		PosUser: posUser,
 	}, nil
 }
 
 func (s *PosUserServiceServer) UpdatePosUser(ctx context.Context, req *pb.UpdatePosUserRequest) (*pb.UpdatePosUserResponse, error) {
-	// Get the role name from the role ID in the JWT payload
 	// Extract role ID from JWT payload
 	jwtRoleID := req.JwtPayload.Role
 
@@ -281,9 +363,8 @@ func (s *PosUserServiceServer) UpdatePosUser(ctx context.Context, req *pb.Update
 		return nil, err
 	}
 
-	// Check if the role is "store"
-	if loginRole.RoleName == "store" {
-		return nil, errors.New("Store users are not allowed to update users")
+	if !utils.IsCompanyOrBranchOrStoreUser(loginRole.RoleName) {
+		return nil, errors.New("users are not allowed to update users data")
 	}
 
 	// Get the user to be updated
@@ -292,14 +373,26 @@ func (s *PosUserServiceServer) UpdatePosUser(ctx context.Context, req *pb.Update
 		return nil, err
 	}
 
-	// Check if the role is "company" and the company IDs don't match
-	if loginRole.RoleName == "company" && posUser.CompanyId != req.JwtPayload.CompanyId {
-		return nil, errors.New("Company users can only update users within their company")
+	companyRole := os.Getenv("COMPANY_USER_ROLE")
+	branchRole := os.Getenv("BRANCH_USER_ROLE")
+	storeRole := os.Getenv("STORE_USER_ROLE")
+
+	if loginRole.RoleName == companyRole {
+		if !utils.VerifyCompanyUserAccess(loginRole.RoleName, posUser.CompanyId, req.JwtPayload.CompanyId) {
+			return nil, errors.New("company users can only update users within their company")
+		}
 	}
 
-	// Check if the role is "branch" and the branch IDs don't match
-	if loginRole.RoleName == "branch" && posUser.BranchId != req.JwtPayload.BranchId {
-		return nil, errors.New("Branch users can only update users within their branch")
+	if loginRole.RoleName == branchRole {
+		if !utils.VerifyBranchUserAccess(loginRole.RoleName, posUser.BranchId, req.JwtPayload.BranchId) {
+			return nil, errors.New("branch users can only update users within their branch")
+		}
+	}
+
+	if loginRole.RoleName == storeRole {
+		if !utils.VerifyStoreUserAccess(loginRole.RoleName, posUser.StoreId, req.JwtPayload.StoreId) {
+			return nil, errors.New("store users can only update users within their branch")
+		}
 	}
 
 	now := timestamppb.New(time.Now())
@@ -338,32 +431,36 @@ func (s *PosUserServiceServer) UpdatePosUser(ctx context.Context, req *pb.Update
 func (s *PosUserServiceServer) DeletePosUser(ctx context.Context, req *pb.DeletePosUserRequest) (*pb.DeletePosUserResponse, error) {
 	// Extract role ID from JWT payload
 	jwtRoleID := req.JwtPayload.Role
-	fmt.Println("ID :", req.UserId)
+	// fmt.Println("ID :", req.UserId)
 	// Get user login role name
 	loginRole, err := s.roleRepo.ReadPosRole(jwtRoleID)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println("login data :", loginRole)
-	// Check if the role is "store"
-	if loginRole.RoleName == "store" {
-		return nil, errors.New("store users are not allowed to delete users")
+
+	if !utils.IsCompanyOrBranchUser(loginRole.RoleName) {
+		return nil, errors.New("users are not allowed to delete users data")
 	}
-	fmt.Println("ID DATA :", req.UserId)
+
 	// Get the user to be updated
 	posUser, err := s.userRepo.ReadPosUser(req.UserId)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println("DELETE DATA :", posUser)
-	// Check if the role is "company" and the company IDs don't match
-	if loginRole.RoleName == "company" && posUser.CompanyId != req.JwtPayload.CompanyId {
-		return nil, errors.New("Company users can only delete users within their company")
+
+	companyRole := os.Getenv("COMPANY_USER_ROLE")
+	branchRole := os.Getenv("BRANCH_USER_ROLE")
+
+	if loginRole.RoleName == companyRole {
+		if !utils.VerifyCompanyUserAccess(loginRole.RoleName, posUser.CompanyId, req.JwtPayload.CompanyId) {
+			return nil, errors.New("company users can only delete users within their company")
+		}
 	}
 
-	// Check if the role is "branch" and the branch IDs don't match
-	if loginRole.RoleName == "branch" && posUser.BranchId != req.JwtPayload.BranchId {
-		return nil, errors.New("Branch users can only delete users within their branch")
+	if loginRole.RoleName == branchRole {
+		if !utils.VerifyBranchUserAccess(loginRole.RoleName, posUser.BranchId, req.JwtPayload.BranchId) {
+			return nil, errors.New("branch users can only delete users within their branch")
+		}
 	}
 
 	// Delete the user
